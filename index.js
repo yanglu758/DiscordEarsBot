@@ -1,6 +1,31 @@
 //////////////////////////////////////////
 //////////////// LOGGING /////////////////
 //////////////////////////////////////////
+// Imports the Google Cloud client library
+const textToSpeech = require('@google-cloud/text-to-speech');
+const client = new textToSpeech.TextToSpeechClient({
+  projectId: 'dogwood-seeker-317006',
+  keyFilename: 'dogwood-seeker-317006-2448708d4924.json'
+});
+
+async function speak(text, languageCode) {
+  // Construct the request
+  const request = {
+    input: {text},
+    // Select the language and SSML voice gender (optional)
+    voice: {languageCode, ssmlGender: 'NEUTRAL'},
+    // select the type of audio encoding
+    audioConfig: {audioEncoding: 'MP3'},
+  };
+
+  // Performs the text-to-speech request
+  const [response] = await client.synthesizeSpeech(request);
+  // Write the binary audio content to a local file
+  const writeFile = util.promisify(fs.writeFile);
+  await writeFile(languageCode+'.mp3', response.audioContent, 'binary');
+  console.log('Audio content written to file: ' + languageCode+'.mp3');
+}
+
 function getCurrentDateString() {
     return (new Date()).toISOString() + ' ::';
 };
@@ -157,6 +182,13 @@ discordClient.on('ready', () => {
 })
 discordClient.login(DISCORD_TOK)
 
+const discordChinese = new Discord.Client()
+discordChinese.login("ODU0MTk4ODUzNDkzMDYzNzUx.YMgcrA.KxTo1JKASo7OvaXfC-fo5ddjtN8")
+const discordKorean = new Discord.Client()
+discordKorean.login("ODU1MzA5OTU0NzczMDI0NzY5.YMwneA.Tb90H4owoQj1XHZYOEIvyQQ2AnU")
+const discordPolish = new Discord.Client()
+discordPolish.login("ODU1MzEwMDQ5ODQ0MTMzOTI4.YMwnjg.3pncImkyF4fTHqdy6VdjtYKKwPA")
+
 const PREFIX = '*';
 const _CMD_HELP        = PREFIX + 'help';
 const _CMD_JOIN        = PREFIX + 'join';
@@ -251,11 +283,26 @@ async function connect(msg, mapKey) {
         let text_Channel = await discordClient.channels.fetch(msg.channel.id);
         if (!text_Channel) return msg.reply("Error: The text channel does not exist!");
         let voice_Connection = await voice_Channel.join();
+        const chinese_voice_channel = await discordChinese.channels.fetch("855306314246651934")
+        const chinese_voice = await chinese_voice_channel.join()
+        const chinese_text_channel = await discordChinese.channels.fetch("855305785893453876")
+        const korean_voice_channel = await discordKorean.channels.fetch("855306254172160040")
+        const korean_voice = await korean_voice_channel.join()
+        const korean_text_channel = await discordKorean.channels.fetch("855305681317396510")
+        const polish_voice_channel = await discordPolish.channels.fetch("855306359998251019")
+        const polish_voice = await polish_voice_channel.join()
+        const polish_text_channel = await discordPolish.channels.fetch("855305736712486982")
         voice_Connection.play(new Silence(), { type: 'opus' });
         guildMap.set(mapKey, {
             'text_Channel': text_Channel,
             'voice_Channel': voice_Channel,
             'voice_Connection': voice_Connection,
+            'zh_text_channel': chinese_text_channel,
+            'zh_voice_channel': chinese_voice,
+            'kr_text_channel': korean_text_channel,
+            'kr_voice_channel': korean_voice,
+            'pl_text_channel': polish_text_channel,
+            'pl_voice_channel': polish_voice,
             'debug': false,
         });
         speak_impl(voice_Connection, mapKey)
@@ -296,12 +343,26 @@ function speak_impl(voice_Connection, mapKey) {
                 console.log("TOO SHORT / TOO LONG; SKPPING")
                 return;
             }
-
             try {
                 let new_buffer = await convert_audio(buffer)
+                if (!new_buffer) {
+                    return
+                }
                 let out = await transcribe(new_buffer);
-                if (out != null)
-                    process_commands_query(out, mapKey, user);
+                if (out != null) {
+                    await process_commands_query(out, mapKey, user);
+                    guildMap.get(mapKey).text_Channel.send(out["en"])
+                    guildMap.get(mapKey).zh_text_channel.send(out["en"])
+                    guildMap.get(mapKey).zh_text_channel.send(out["zh"])
+                    guildMap.get(mapKey).kr_text_channel.send(out["en"])
+                    guildMap.get(mapKey).kr_text_channel.send(out["ko"])
+                    guildMap.get(mapKey).pl_text_channel.send(out["en"])
+                    guildMap.get(mapKey).pl_text_channel.send(out["pl"])
+                    guildMap.get(mapKey).zh_voice_channel.play("zh.mp3")
+                    guildMap.get(mapKey).kr_voice_channel.play("ko.mp3")
+                    guildMap.get(mapKey).pl_voice_channel.play("pl.mp3")
+                    
+                }
             } catch (e) {
                 console.log('tmpraw rename: ' + e)
             }
@@ -311,11 +372,19 @@ function speak_impl(voice_Connection, mapKey) {
     })
 }
 
-function process_commands_query(txt, mapKey, user) {
-    if (txt && txt.length) {
+async function process_commands_query(txt, mapKey, user) {
+    const promises = []
+    if (txt && Object.keys(txt).length) {
         let val = guildMap.get(mapKey);
-        val.text_Channel.send(user.username + ': ' + txt)
+        for (const language in txt) {
+            const promise = new Promise(async (resolve, reject) => {
+                await speak(txt[language], language)
+                resolve(true)
+            })
+            promises.push(promise)
+        }
     }
+    await Promise.all(promises)
 }
 
 
@@ -324,8 +393,23 @@ function process_commands_query(txt, mapKey, user) {
 //////////////////////////////////////////
 async function transcribe(buffer) {
 
-  return transcribe_witai(buffer)
-  // return transcribe_gspeech(buffer)
+  // return transcribe_witai(buffer)
+  const english = await transcribe_gspeech(buffer)
+  const promises = []
+  for (const language of ["zh", "pl", "ko"]) {
+    const promise = new Promise(async (resolve, reject) => {
+        const output = await translateText(english, language)
+        resolve(output)
+    })
+    promises.push(promise)
+  }
+  const output = await Promise.all(promises)
+  return {
+    en: english,
+    zh: output[0],
+    pl: output[1],
+    ko: output[2]
+  }
 }
 
 // WitAI
@@ -363,13 +447,15 @@ async function transcribe_witai(buffer) {
     } catch (e) { console.log('transcribe_witai 851:' + e); console.log(e) }
 }
 
+
 // Google Speech API
 // https://cloud.google.com/docs/authentication/production
 const gspeech = require('@google-cloud/speech');
 const gspeechclient = new gspeech.SpeechClient({
-  projectId: 'discordbot',
-  keyFilename: 'gspeech_key.json'
+  projectId: 'dogwood-seeker-317006',
+  keyFilename: 'dogwood-seeker-317006-2448708d4924.json'
 });
+
 
 async function transcribe_gspeech(buffer) {
   try {
@@ -381,7 +467,199 @@ async function transcribe_gspeech(buffer) {
       const config = {
         encoding: 'LINEAR16',
         sampleRateHertz: 48000,
-        languageCode: 'en-US',  // https://cloud.google.com/speech-to-text/docs/languages
+        model: "default",
+        languageCode: 'en-AU',  // https://cloud.google.com/speech-to-text/docs/languages
+        speechContexts: [{
+            phrases: [
+                "Cryptex",
+                "Squawk",
+                "Last 60 minutes",
+                "Theta",
+                "DEX",
+                "Dex",
+                "Polychain",
+                "Blockchain",
+                "Hashrate",
+                "Speculative",
+                "Currently pulling to the upside",
+                "Currently pulling to the downside",
+                "Over the last 60 minutes",
+                "In the last 10 seconds",
+                "In the last 30 seconds",
+                "Bearish",
+                "Bullish",
+                "Michael Saylor",
+                "Microstrategy",
+                "SEC",
+                "ETF",
+                "Approaching the previous swing high",
+                "Approaching the previous swing low",
+                "Top positive returns",
+                "Top negative returns",
+                "For the same period",
+                "Will be back in 5 minutes",
+                "Binance will remove and cease trading",
+                "USDC",
+                "Eth",
+                "Objective",
+                "Hourly",
+                "Via an article",
+                "Coin telegraph",
+                "Sam Bankman-Fried",
+                "Currently leading the lows",
+                "Currently leading the highs",
+                "Syncing issue",
+                "Endpoints",
+                "Investigating",
+                "Hourly close",
+                "Current outlier",
+                "Currently an outlier to the",
+                "Lows",
+                "That concludes the",
+                "Asian session",
+                "US session",
+                "European session",
+                "I will now hand you over to",
+                "Lawrence",
+                "Peter",
+                "Nathan",
+                "Cryptex",
+                "Nikkei",
+                "Range low",
+                "Maker",
+                "The current price is",
+                "Price alert on",
+                "Open interest for the last",
+                "At the top of the hour",
+                "Outlier to the downside",
+                "Outlier to the upside",
+                "Elon Musk",
+                "Binance",
+                "Bitmex",
+                "Okex",
+                "Deribit",
+                "Bloomberg",
+                "24 hour exchange wallet flows",
+                "Seoul",
+                "Shanghai",
+                "Bitcoin",
+                "Ethereum",
+                'SHIB', 
+                '1INCH',
+                'AAVE', 
+                'ADA', 
+                'AKRO', 
+                'ALGO', 
+                'ALICE', 
+                'ALPHA', 
+                'ANKR', 
+                'ATOM', 
+                'AVAX',
+                'AXS', 
+                'BAKE', 
+                'BAL', 
+                'BAND', 
+                'BAT', 
+                'BCH', 
+                'BEL', 
+                'BLZ', 
+                'BNB', 
+                'BTC', 
+                'BTS', 
+                'BTT', 
+                'BZRX', 
+                'CELR',
+                'CHR', 
+                'CHZ', 
+                'COMP', 
+                'COTI', 
+                'CRV', 
+                'CTK', 
+                'CVC', 
+                'DASH', 
+                'DEFI', 
+                'DENT', 
+                'DGB', 
+                'DODO', 
+                'DOGE', 
+                'DOT', 
+                'EGLD', 
+                'ENJ', 
+                'EOS', 
+                'ETC', 
+                'ETH', 
+                'FIL', 
+                'FLM', 
+                'FTM', 
+                'GRT', 
+                'GTC', 
+                'HBAR', 
+                'HNT', 
+                'HOT', 
+                'ICP', 
+                'ICX', 
+                'IOST', 
+                'IOTA', 
+                'KAVA', 
+                'KNC', 
+                'KSM', 
+                'LINA', 
+                'LINK', 
+                'LIT', 
+                'LRC', 
+                'LTC', 
+                'LUNA', 
+                'MANA', 
+                'MATIC', 
+                'MKR', 
+                'MTL', 
+                'NEAR', 
+                'NEO', 
+                'NKN', 
+                'OCEAN', 
+                'OGN', 
+                'OMG', 
+                'ONE', 
+                'ONT', 
+                'QTUM', 
+                'REEF', 
+                'REN', 
+                'RLC', 
+                'RSR', 
+                'RUNE', 
+                'RVN', 
+                'SAND', 
+                'SC', 
+                'SFP', 
+                'SKL', 
+                'SNX', 
+                'SOL', 
+                'SRM', 
+                'STMX', 
+                'STORJ', 
+                'SUSHI', 
+                'SXP', 
+                'THETA', 
+                'TOMO', 
+                'TRB', 
+                'TRX', 
+                'UNFI', 
+                'UNI', 
+                'VET', 
+                'WAVES', 
+                'XEM', 
+                'XLM', 
+                'XMR', 
+                'XRP', 
+                'XTZ', 
+                'YFII', 
+                'YFI', 
+                'ZEC', 
+                'ZEN', 
+                'ZIL', 
+                'ZRX'
+            ]
+        }]
       };
       const request = {
         audio: audio,
@@ -397,6 +675,36 @@ async function transcribe_gspeech(buffer) {
 
   } catch (e) { console.log('transcribe_gspeech 368:' + e) }
 }
+
+const {TranslationServiceClient} = require('@google-cloud/translate');
+const translationClient = new TranslationServiceClient({
+  projectId: 'dogwood-seeker-317006',
+  keyFilename: 'dogwood-seeker-317006-2448708d4924.json'
+});
+const projectId = 'dogwood-seeker-317006';
+const location = 'global';
+async function translateText(text, language) {
+  // Construct request
+  const request = {
+    parent: `projects/${projectId}/locations/${location}`,
+    contents: [text],
+    mimeType: 'text/plain', // mime types: text/plain, text/html
+    sourceLanguageCode: 'en',
+    targetLanguageCode: language,
+  };
+
+  // Run request
+  const [response] = await translationClient.translateText(request);
+
+  for (const translation of response.translations) {
+    console.log(`Translation: ${translation.translatedText}`);
+  }
+  return response.translations
+    .map(v => v.translatedText)
+    .join("\n")
+}
+
+
 
 //////////////////////////////////////////
 //////////////////////////////////////////

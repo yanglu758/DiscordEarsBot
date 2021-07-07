@@ -8,7 +8,6 @@
     "start": "node index.js"
   },
   "engines": {
-    "node": "12.x",
     "node": "14.x"
   },
   "author": "Ilja Nevolin",
@@ -24,8 +23,11 @@
   "dependencies": {
     "@discordjs/opus": "^0.4.0",
     "@google-cloud/speech": "^4.2.0",
+    "@google-cloud/text-to-speech": "^3.2.2",
+    "@google-cloud/translate": "^6.2.2",
     "@mapbox/node-pre-gyp": "^1.0.1",
     "discord.js": "^12.5.1",
+    "ffmpeg-static": "^4.3.0",
     "node-witai-speech": "^1.0.2",
     "request": "^2.88.2",
     "underscore": "^1.12.0"
