@@ -1,3 +1,16 @@
+const {
+  TranscribeStreamingClient,
+  StartStreamTranscriptionCommand,
+  StartMedicalStreamTranscriptionCommand,
+} = require("@aws-sdk/client-transcribe-streaming");
+const { Readable } = require("stream")
+
+// Set the AWS Region.
+const REGION = "eu-central-1"; //e.g. "us-east-1"
+// Create Transcribe service object.
+const awsClient = new TranscribeStreamingClient({ region: REGION });
+
+
 //////////////////////////////////////////
 //////////////// LOGGING /////////////////
 //////////////////////////////////////////
@@ -40,7 +53,6 @@ console.log = function () {
 const fs = require('fs');
 const util = require('util');
 const path = require('path');
-const { Readable } = require('stream');
 
 //////////////////////////////////////////
 ///////////////// VARIA //////////////////
@@ -88,12 +100,18 @@ const SETTINGS_FILE = 'settings.json';
 
 let DISCORD_TOK = null;
 let WITAPIKEY = null; 
+let DISCORD_CHINESE;
+let DISCORD_KOREAN;
+let DISCORD_POLISH;
 
 function loadConfig() {
     if (fs.existsSync(SETTINGS_FILE)) {
         const CFG_DATA = JSON.parse( fs.readFileSync(SETTINGS_FILE, 'utf8') );
         DISCORD_TOK = CFG_DATA.discord_token;
         WITAPIKEY = CFG_DATA.wit_ai_token;
+        // DISCORD_CHINESE = CFG_DATA.discord_chinese
+        // DISCORD_KOREAN = CFG_DATA.discord_korean
+        // DISCORD_POLISH = CFG_DATA.discord_polish
     } else {
         DISCORD_TOK = process.env.DISCORD_TOK;
         WITAPIKEY = process.env.WITAPIKEY;
@@ -182,12 +200,12 @@ discordClient.on('ready', () => {
 })
 discordClient.login(DISCORD_TOK)
 
-const discordChinese = new Discord.Client()
-discordChinese.login("ODU0MTk4ODUzNDkzMDYzNzUx.YMgcrA.KxTo1JKASo7OvaXfC-fo5ddjtN8")
-const discordKorean = new Discord.Client()
-discordKorean.login("ODU1MzA5OTU0NzczMDI0NzY5.YMwneA.Tb90H4owoQj1XHZYOEIvyQQ2AnU")
-const discordPolish = new Discord.Client()
-discordPolish.login("ODU1MzEwMDQ5ODQ0MTMzOTI4.YMwnjg.3pncImkyF4fTHqdy6VdjtYKKwPA")
+// const discordChinese = new Discord.Client()
+// discordChinese.login(DISCORD_CHINESE)
+// const discordKorean = new Discord.Client()
+// discordKorean.login(DISCORD_KOREAN)
+// const discordPolish = new Discord.Client()
+// discordPolish.login(DISCORD_POLISH)
 
 const PREFIX = '*';
 const _CMD_HELP        = PREFIX + 'help';
@@ -283,26 +301,26 @@ async function connect(msg, mapKey) {
         let text_Channel = await discordClient.channels.fetch(msg.channel.id);
         if (!text_Channel) return msg.reply("Error: The text channel does not exist!");
         let voice_Connection = await voice_Channel.join();
-        const chinese_voice_channel = await discordChinese.channels.fetch("855306314246651934")
-        const chinese_voice = await chinese_voice_channel.join()
-        const chinese_text_channel = await discordChinese.channels.fetch("855305785893453876")
-        const korean_voice_channel = await discordKorean.channels.fetch("855306254172160040")
-        const korean_voice = await korean_voice_channel.join()
-        const korean_text_channel = await discordKorean.channels.fetch("855305681317396510")
-        const polish_voice_channel = await discordPolish.channels.fetch("855306359998251019")
-        const polish_voice = await polish_voice_channel.join()
-        const polish_text_channel = await discordPolish.channels.fetch("855305736712486982")
+        // const chinese_voice_channel = await discordChinese.channels.fetch("855306314246651934")
+        // const chinese_voice = await chinese_voice_channel.join()
+        // const chinese_text_channel = await discordChinese.channels.fetch("855305785893453876")
+        // const korean_voice_channel = await discordKorean.channels.fetch("855306254172160040")
+        // const korean_voice = await korean_voice_channel.join()
+        // const korean_text_channel = await discordKorean.channels.fetch("855305681317396510")
+        // const polish_voice_channel = await discordPolish.channels.fetch("855306359998251019")
+        // const polish_voice = await polish_voice_channel.join()
+        // const polish_text_channel = await discordPolish.channels.fetch("855305736712486982")
         voice_Connection.play(new Silence(), { type: 'opus' });
         guildMap.set(mapKey, {
             'text_Channel': text_Channel,
             'voice_Channel': voice_Channel,
             'voice_Connection': voice_Connection,
-            'zh_text_channel': chinese_text_channel,
-            'zh_voice_channel': chinese_voice,
-            'kr_text_channel': korean_text_channel,
-            'kr_voice_channel': korean_voice,
-            'pl_text_channel': polish_text_channel,
-            'pl_voice_channel': polish_voice,
+            // 'zh_text_channel': chinese_text_channel,
+            // 'zh_voice_channel': chinese_voice,
+            // 'kr_text_channel': korean_text_channel,
+            // 'kr_voice_channel': korean_voice,
+            // 'pl_text_channel': polish_text_channel,
+            // 'pl_voice_channel': polish_voice,
             'debug': false,
         });
         speak_impl(voice_Connection, mapKey)
@@ -351,16 +369,18 @@ function speak_impl(voice_Connection, mapKey) {
                 let out = await transcribe(new_buffer);
                 if (out != null) {
                     await process_commands_query(out, mapKey, user);
-                    guildMap.get(mapKey).text_Channel.send(out["en"])
-                    guildMap.get(mapKey).zh_text_channel.send(out["en"])
-                    guildMap.get(mapKey).zh_text_channel.send(out["zh"])
-                    guildMap.get(mapKey).kr_text_channel.send(out["en"])
-                    guildMap.get(mapKey).kr_text_channel.send(out["ko"])
-                    guildMap.get(mapKey).pl_text_channel.send(out["en"])
-                    guildMap.get(mapKey).pl_text_channel.send(out["pl"])
-                    guildMap.get(mapKey).zh_voice_channel.play("zh.mp3")
-                    guildMap.get(mapKey).kr_voice_channel.play("ko.mp3")
-                    guildMap.get(mapKey).pl_voice_channel.play("pl.mp3")
+                    if (out["en"]) {
+                      guildMap.get(mapKey).text_Channel.send(out["en"])
+                    }
+                    // guildMap.get(mapKey).zh_text_channel.send(out["en"])
+                    // guildMap.get(mapKey).zh_text_channel.send(out["zh"])
+                    // guildMap.get(mapKey).kr_text_channel.send(out["en"])
+                    // guildMap.get(mapKey).kr_text_channel.send(out["ko"])
+                    // guildMap.get(mapKey).pl_text_channel.send(out["en"])
+                    // guildMap.get(mapKey).pl_text_channel.send(out["pl"])
+                    // guildMap.get(mapKey).zh_voice_channel.play("zh.mp3")
+                    // guildMap.get(mapKey).kr_voice_channel.play("ko.mp3")
+                    // guildMap.get(mapKey).pl_voice_channel.play("pl.mp3")
                     
                 }
             } catch (e) {
@@ -392,9 +412,16 @@ async function process_commands_query(txt, mapKey, user) {
 //////////////// SPEECH //////////////////
 //////////////////////////////////////////
 async function transcribe(buffer) {
-
-  // return transcribe_witai(buffer)
   const english = await transcribe_gspeech(buffer)
+  console.log("Google", english)
+  const english1 = await transcribe_amazon(buffer)
+  console.log("Amazon", english1)
+  if (!english1 || english1.length < 1) {
+    return
+  }
+  console.log(english1)
+  // return transcribe_witai(buffer)
+  
   const promises = []
   for (const language of ["zh", "pl", "ko"]) {
     const promise = new Promise(async (resolve, reject) => {
@@ -456,7 +483,60 @@ const gspeechclient = new gspeech.SpeechClient({
   keyFilename: 'dogwood-seeker-317006-2448708d4924.json'
 });
 
+function wait(time) {
+    return new Promise(resolve => {
+        setTimeout(resolve, time);
+    })
+}
 
+async function* audioSource(fileBuf) {
+    const chunkSize = 10 * 1000;
+    let index = 0;
+    let i = 0;
+    while(index < fileBuf.length) {
+    // while(index < chunkSize * 60) {
+        const chunk = fileBuf.slice(index, Math.min(index + chunkSize, fileBuf.byteLength));
+        await wait(300);
+        yield chunk;
+        index += chunkSize;
+    }
+}
+
+async function transcribe_amazon(buffer) {
+  async function* audioStream(fileBuf) {
+    for await(const chunk of audioSource(fileBuf)) {
+        yield {AudioEvent: {AudioChunk: chunk}}
+    }
+  }
+  try {
+    console.log('transcribing amazon...')
+    const command = new StartStreamTranscriptionCommand({
+      LanguageCode: "en-AU",
+      MediaEncoding: "pcm",
+      MediaSampleRateHertz: 16000,
+      AudioStream: audioStream(buffer)
+    });
+    const response = await awsClient.send(command)
+    let strs = []
+    for await (const event of response.TranscriptResultStream) {
+      if (event.TranscriptEvent) {
+        if (event.TranscriptEvent.Transcript.Results &&
+          event.TranscriptEvent.Transcript.Results.length > 0) {
+          const result = event.TranscriptEvent.Transcript.Results[0]
+          if (result.IsPartial === false) {
+            strs.push(result.Alternatives[0].Transcript)
+          }
+        }
+      }
+    }
+    if (strs.length > 0) {
+      return strs.join(" ")
+    }
+    console.log("The End")
+  } catch (e) {
+    console.error(e)
+  }
+}
 async function transcribe_gspeech(buffer) {
   try {
       console.log('transcribe_gspeech')
