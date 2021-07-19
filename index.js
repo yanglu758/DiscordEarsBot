@@ -3,41 +3,25 @@ const {
   StartStreamTranscriptionCommand,
   StartMedicalStreamTranscriptionCommand,
 } = require("@aws-sdk/client-transcribe-streaming");
+const {
+    TranscribeClient,
+    StartTranscriptionJobCommand,
+    GetTranscriptionJobCommand
+}  = require("@aws-sdk/client-transcribe")
 const { Readable } = require("stream")
-
+const { NodeHttp2Handler} = require("@aws-sdk/node-http-handler");
+const { Agent } = require("http");
+const WavFileWriter = require('wav').FileWriter;
+const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3")
 // Set the AWS Region.
-const REGION = "eu-central-1"; //e.g. "us-east-1"
+const REGION = "ap-southeast-2"; //e.g. "us-east-1"
 // Create Transcribe service object.
-const awsClient = new TranscribeStreamingClient({ region: REGION });
 
 
 //////////////////////////////////////////
 //////////////// LOGGING /////////////////
 //////////////////////////////////////////
-// Imports the Google Cloud client library
-const textToSpeech = require('@google-cloud/text-to-speech');
-const client = new textToSpeech.TextToSpeechClient({
-  projectId: 'dogwood-seeker-317006',
-  keyFilename: 'dogwood-seeker-317006-2448708d4924.json'
-});
 
-async function speak(text, languageCode) {
-  // Construct the request
-  const request = {
-    input: {text},
-    // Select the language and SSML voice gender (optional)
-    voice: {languageCode, ssmlGender: 'NEUTRAL'},
-    // select the type of audio encoding
-    audioConfig: {audioEncoding: 'MP3'},
-  };
-
-  // Performs the text-to-speech request
-  const [response] = await client.synthesizeSpeech(request);
-  // Write the binary audio content to a local file
-  const writeFile = util.promisify(fs.writeFile);
-  await writeFile(languageCode+'.mp3', response.audioContent, 'binary');
-  console.log('Audio content written to file: ' + languageCode+'.mp3');
-}
 
 function getCurrentDateString() {
     return (new Date()).toISOString() + ' ::';
@@ -109,9 +93,9 @@ function loadConfig() {
         const CFG_DATA = JSON.parse( fs.readFileSync(SETTINGS_FILE, 'utf8') );
         DISCORD_TOK = CFG_DATA.discord_token;
         WITAPIKEY = CFG_DATA.wit_ai_token;
-        // DISCORD_CHINESE = CFG_DATA.discord_chinese
-        // DISCORD_KOREAN = CFG_DATA.discord_korean
-        // DISCORD_POLISH = CFG_DATA.discord_polish
+        DISCORD_CHINESE = CFG_DATA.discord_chinese
+        DISCORD_KOREAN = CFG_DATA.discord_korean
+        DISCORD_POLISH = CFG_DATA.discord_polish
     } else {
         DISCORD_TOK = process.env.DISCORD_TOK;
         WITAPIKEY = process.env.WITAPIKEY;
@@ -200,12 +184,12 @@ discordClient.on('ready', () => {
 })
 discordClient.login(DISCORD_TOK)
 
-// const discordChinese = new Discord.Client()
-// discordChinese.login(DISCORD_CHINESE)
-// const discordKorean = new Discord.Client()
-// discordKorean.login(DISCORD_KOREAN)
-// const discordPolish = new Discord.Client()
-// discordPolish.login(DISCORD_POLISH)
+const discordChinese = new Discord.Client()
+discordChinese.login(DISCORD_CHINESE)
+const discordKorean = new Discord.Client()
+discordKorean.login(DISCORD_KOREAN)
+const discordPolish = new Discord.Client()
+discordPolish.login(DISCORD_POLISH)
 
 const PREFIX = '*';
 const _CMD_HELP        = PREFIX + 'help';
@@ -336,8 +320,8 @@ async function connect(msg, mapKey) {
     }
 }
 
-
 function speak_impl(voice_Connection, mapKey) {
+  let transcribing = false
     voice_Connection.on('speaking', async (user, speaking) => {
         if (speaking.bitfield == 0 || user.bot) {
             return
@@ -353,40 +337,48 @@ function speak_impl(voice_Connection, mapKey) {
             buffer.push(data)
         })
         audioStream.on('end', async () => {
-            buffer = Buffer.concat(buffer)
-            const duration = buffer.length / 48000 / 4;
-            console.log("duration: " + duration)
+          if (transcribing) {
+            await sleep(10000)
+          }
+          buffer = Buffer.concat(buffer)
+          const duration = buffer.length / 48000 / 4;
+          console.log("duration: " + duration)
 
-            if (duration < 1.0 || duration > 19) { // 20 seconds max dur
-                console.log("TOO SHORT / TOO LONG; SKPPING")
-                return;
+          if (duration < 1.0 || duration > 60) { // 60 seconds max dur
+              console.log("TOO SHORT / TOO LONG; SKPPING")
+              return;
+          }
+          try {
+            let new_buffer = await convert_audio(buffer)
+            if (!new_buffer) {
+                return
             }
-            try {
-                let new_buffer = await convert_audio(buffer)
-                if (!new_buffer) {
-                    return
-                }
-                let out = await transcribe(new_buffer);
-                if (out != null) {
-                    await process_commands_query(out, mapKey, user);
-                    if (out["en"]) {
-                      guildMap.get(mapKey).text_Channel.send(out["en"])
-                    }
-                    // guildMap.get(mapKey).zh_text_channel.send(out["en"])
-                    // guildMap.get(mapKey).zh_text_channel.send(out["zh"])
-                    // guildMap.get(mapKey).kr_text_channel.send(out["en"])
-                    // guildMap.get(mapKey).kr_text_channel.send(out["ko"])
-                    // guildMap.get(mapKey).pl_text_channel.send(out["en"])
-                    // guildMap.get(mapKey).pl_text_channel.send(out["pl"])
-                    // guildMap.get(mapKey).zh_voice_channel.play("zh.mp3")
-                    // guildMap.get(mapKey).kr_voice_channel.play("ko.mp3")
-                    // guildMap.get(mapKey).pl_voice_channel.play("pl.mp3")
-                    
-                }
-            } catch (e) {
-                console.log('tmpraw rename: ' + e)
-            }
+            // critical section
+            transcribing = true
+            let out = await transcribe(new_buffer);
+            transcribing = false
 
+            if (out != null) {
+              // await process_commands_query(out, mapKey, user);
+              if (out["en"]) {
+                guildMap.get(mapKey).text_Channel.send(out["en"])
+              }
+              if (out["am"]) {
+                guildMap.get(mapKey).text_Channel.send(out["am"])
+              }
+              // guildMap.get(mapKey).zh_text_channel.send(out["en"])
+              // guildMap.get(mapKey).zh_text_channel.send(out["zh"])
+              // guildMap.get(mapKey).kr_text_channel.send(out["en"])
+              // guildMap.get(mapKey).kr_text_channel.send(out["ko"])
+              // guildMap.get(mapKey).pl_text_channel.send(out["en"])
+              // guildMap.get(mapKey).pl_text_channel.send(out["pl"])
+              // guildMap.get(mapKey).zh_voice_channel.play("zh.mp3")
+              // guildMap.get(mapKey).kr_voice_channel.play("ko.mp3")
+              // guildMap.get(mapKey).pl_voice_channel.play("pl.mp3")  
+            }
+          } catch (e) {
+            console.log('tmpraw rename: ' + e)
+          }
 
         })
     })
@@ -412,30 +404,29 @@ async function process_commands_query(txt, mapKey, user) {
 //////////////// SPEECH //////////////////
 //////////////////////////////////////////
 async function transcribe(buffer) {
-  const english = await transcribe_gspeech(buffer)
-  console.log("Google", english)
-  const english1 = await transcribe_amazon(buffer)
-  console.log("Amazon", english1)
-  if (!english1 || english1.length < 1) {
-    return
-  }
-  console.log(english1)
+  const promises = [
+    transcribe_gspeech(buffer),
+    transcribe_amazon(buffer)
+  ]
+  const results = await Promise.all(promises)
+  console.log("Google", results[0])
+  console.log("Amazon", results[1])
   // return transcribe_witai(buffer)
-  
-  const promises = []
-  for (const language of ["zh", "pl", "ko"]) {
-    const promise = new Promise(async (resolve, reject) => {
-        const output = await translateText(english, language)
-        resolve(output)
-    })
-    promises.push(promise)
-  }
-  const output = await Promise.all(promises)
+  // const promises = []
+  // for (const language of ["zh", "pl", "ko"]) {
+  //   const promise = new Promise(async (resolve, reject) => {
+  //       const output = await translateText(english, language)
+  //       resolve(output)
+  //   })
+  //   promises.push(promise)
+  // }
+  // const output = await Promise.all(promises)
   return {
-    en: english,
-    zh: output[0],
-    pl: output[1],
-    ko: output[2]
+    en: "[Google] " + results[0],
+    am: "[Amazon] " + results[1],
+    // zh: output[0],
+    // pl: output[1],
+    // ko: output[2]
   }
 }
 
@@ -490,56 +481,105 @@ function wait(time) {
 }
 
 async function* audioSource(fileBuf) {
-    const chunkSize = 10 * 1000;
+    const chunkSize = 16 * 1024;
     let index = 0;
     let i = 0;
     while(index < fileBuf.length) {
     // while(index < chunkSize * 60) {
         const chunk = fileBuf.slice(index, Math.min(index + chunkSize, fileBuf.byteLength));
-        await wait(300);
         yield chunk;
         index += chunkSize;
     }
 }
 
+var toWav = require('audiobuffer-to-wav')
+const WavEncoder = require("wav-encoder");
+const s3Client = new S3Client({ region: REGION })
+var AudioContext = require('web-audio-api').AudioContext
+  , context = new AudioContext
+const axios = require("axios")
 async function transcribe_amazon(buffer) {
-  async function* audioStream(fileBuf) {
-    for await(const chunk of audioSource(fileBuf)) {
-        yield {AudioEvent: {AudioChunk: chunk}}
-    }
-  }
+    const audioContext = new AudioContext();
+    const timestamp = Date.now().toString()
+    const outputStream = new WavFileWriter("./data/" + timestamp + ".wav", {
+        sampleRate: 48000,
+        channels: 1,
+        bitDepth: 16
+    })
+    outputStream.write(buffer)
+    await sleep(2000)
+    const data = await s3Client.send(new PutObjectCommand({
+        Bucket: "starbeta-transcribe",
+        Body: fs.readFileSync("./data/" + timestamp + ".wav"),
+        Key: "audio-data/" + timestamp + ".wav"
+    }))
+  // async function* audioStream(fileBuf) {
+  //   for await(const chunk of audioSource(fileBuf)) {
+  //     yield {AudioEvent: {AudioChunk: chunk}}
+  //   }
+  // }
   try {
+    const transcribeClient = new TranscribeClient({ region: REGION });
     console.log('transcribing amazon...')
-    const command = new StartStreamTranscriptionCommand({
+    const command = new StartTranscriptionJobCommand({
+      TranscriptionJobName:  "" + timestamp,
       LanguageCode: "en-AU",
       MediaEncoding: "pcm",
-      MediaSampleRateHertz: 16000,
-      AudioStream: audioStream(buffer)
-    });
-    const response = await awsClient.send(command)
-    let strs = []
-    for await (const event of response.TranscriptResultStream) {
-      if (event.TranscriptEvent) {
-        if (event.TranscriptEvent.Transcript.Results &&
-          event.TranscriptEvent.Transcript.Results.length > 0) {
-          const result = event.TranscriptEvent.Transcript.Results[0]
-          if (result.IsPartial === false) {
-            strs.push(result.Alternatives[0].Transcript)
-          }
-        }
+      MediaSampleRateHertz: 48000,
+      MediaFormat: "wav",
+      ModelSettings: {
+        LanguageModelName: 'Model1'
+      },
+      Media: {
+        MediaFileUri: 's3://starbeta-transcribe/audio-data/' +  timestamp + ".wav"
       }
+    });
+    await transcribeClient.send(command)
+    console.log(timestamp)
+    let response = await transcribeClient.send(new GetTranscriptionJobCommand({
+        TranscriptionJobName: "" + timestamp
+    }))
+    while (response.TranscriptionJob.TranscriptionJobStatus === 'IN_PROGRESS') {
+        await sleep(3000)
+        response = await transcribeClient.send(new GetTranscriptionJobCommand({
+            TranscriptionJobName: "" + timestamp
+        }))
     }
-    if (strs.length > 0) {
-      return strs.join(" ")
+    if (response.TranscriptionJob.TranscriptionJobStatus === 'COMPLETED') {
+        const file = await axios.get(response.TranscriptionJob.Transcript.TranscriptFileUri)
+        const result = file.data
+        if (result.results &&
+            result.results.transcripts &&
+            result.results.transcripts[0].transcript) {
+            return result.results.transcripts[0].transcript
+        }
     }
-    console.log("The End")
+    // let strs = []
+    // for await (const event of response.TranscriptResultStream) {
+    //   if (event.TranscriptEvent) {
+    //     if (event.TranscriptEvent.Transcript.Results &&
+    //       event.TranscriptEvent.Transcript.Results.length > 0) {
+    //         console.log(event.TranscriptEvent.Transcript.Results[0].Alternatives[0].Items)
+    //         console.log(event.TranscriptEvent.Transcript.Results[0].Alternatives[0].Transcript)
+    //       const result = event.TranscriptEvent.Transcript.Results[0]
+    //       if (result.IsPartial === false) {
+    //         strs.push(result.Alternatives[0].Transcript)
+    //       }
+    //     }
+    //   }
+    // }
+    // awsClient.destroy()
+    // if (strs.length > 0) {
+    //   return strs.join(" ")
+    // }
   } catch (e) {
     console.error(e)
   }
 }
+
 async function transcribe_gspeech(buffer) {
   try {
-      console.log('transcribe_gspeech')
+      console.log('transcribing google...')
       const bytes = buffer.toString('base64');
       const audio = {
         content: bytes,
@@ -750,7 +790,6 @@ async function transcribe_gspeech(buffer) {
       const transcription = response.results
         .map(result => result.alternatives[0].transcript)
         .join('\n');
-      console.log(`gspeech: ${transcription}`);
       return transcription;
 
   } catch (e) { console.log('transcribe_gspeech 368:' + e) }
@@ -784,6 +823,29 @@ async function translateText(text, language) {
     .join("\n")
 }
 
+// Imports the Google Cloud client library
+const textToSpeech = require('@google-cloud/text-to-speech');
+const client = new textToSpeech.TextToSpeechClient({
+  projectId: 'dogwood-seeker-317006',
+  keyFilename: 'dogwood-seeker-317006-2448708d4924.json'
+});
+async function speak(text, languageCode) {
+  // Construct the request
+  const request = {
+    input: {text},
+    // Select the language and SSML voice gender (optional)
+    voice: {languageCode, ssmlGender: 'NEUTRAL'},
+    // select the type of audio encoding
+    audioConfig: {audioEncoding: 'MP3'},
+  };
+
+  // Performs the text-to-speech request
+  const [response] = await client.synthesizeSpeech(request);
+  // Write the binary audio content to a local file
+  const writeFile = util.promisify(fs.writeFile);
+  await writeFile(languageCode+'.mp3', response.audioContent, 'binary');
+  console.log('Audio content written to file: ' + languageCode+'.mp3');
+}
 
 
 //////////////////////////////////////////
